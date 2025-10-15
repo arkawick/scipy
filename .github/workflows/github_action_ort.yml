@@ -1,0 +1,153 @@
+name: ORT Analysis
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  ort-analysis:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Set up Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+        
+    - name: Install python-inspector
+      run: |
+        pip install python-inspector
+        python-inspector --version
+        
+    - name: Install ScanCode (optional)
+      run: |
+        pip install scancode-toolkit
+        scancode --version
+      continue-on-error: true
+        
+    - name: Download ORT
+      run: |
+        ORT_VERSION="70.0.1"
+        wget -q https://github.com/oss-review-toolkit/ort/releases/download/${ORT_VERSION}/ort-${ORT_VERSION}.tgz
+        tar -xzf ort-${ORT_VERSION}.tgz
+        echo "${GITHUB_WORKSPACE}/ort-${ORT_VERSION}/bin" >> $GITHUB_PATH
+        
+    - name: Verify ORT installation
+      run: |
+        ort --version
+        java -version
+        
+    - name: Clean previous results
+      run: |
+        rm -rf ort-results
+        mkdir -p ort-results
+        
+    - name: Run ORT Analyzer
+      run: |
+        ort analyze \
+          -i . \
+          -o ort-results/analyzer
+          
+    - name: Run ORT Advisor
+      run: |
+        ort advise \
+          -i ort-results/analyzer/analyzer-result.yml \
+          -o ort-results/advisor \
+          --advisors OSV
+      continue-on-error: true
+      
+    - name: Run ORT Scanner
+      run: |
+        if [ -f ort-results/advisor/advise-result.yml ]; then
+          INPUT_FILE="ort-results/advisor/advise-result.yml"
+        else
+          INPUT_FILE="ort-results/analyzer/analyzer-result.yml"
+        fi
+        
+        ort scan \
+          -i "$INPUT_FILE" \
+          -o ort-results/scanner
+      continue-on-error: true
+      
+    - name: Generate ORT Reports
+      run: |
+        # Determine the latest result file
+        if [ -f ort-results/scanner/scan-result.yml ]; then
+          INPUT_FILE="ort-results/scanner/scan-result.yml"
+        elif [ -f ort-results/advisor/advise-result.yml ]; then
+          INPUT_FILE="ort-results/advisor/advise-result.yml"
+        else
+          INPUT_FILE="ort-results/analyzer/analyzer-result.yml"
+        fi
+        
+        ort report \
+          -i "$INPUT_FILE" \
+          -o ort-results/reporter \
+          -f WebApp,StaticHtml,CycloneDx,SpdxDocument
+          
+    - name: Upload ORT Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ort-results
+        path: ort-results/
+        retention-days: 30
+        
+    - name: Upload WebApp Report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ort-webapp-report
+        path: ort-results/reporter/WebApp.html
+        retention-days: 30
+        
+    - name: Check for vulnerabilities
+      run: |
+        if [ -f ort-results/advisor/advise-result.yml ]; then
+          echo "## ORT Analysis Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Count issues
+          VULN_COUNT=$(grep -c "vulnerability" ort-results/advisor/advise-result.yml 2>/dev/null || echo "0")
+          
+          echo "- **Vulnerabilities found**: $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📊 Download the artifacts to view detailed reports." >> $GITHUB_STEP_SUMMARY
+        fi
+      continue-on-error: true
+      
+    - name: Comment PR with results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          
+          let comment = '## 🔍 ORT Analysis Results\n\n';
+          comment += '✅ Analysis completed successfully!\n\n';
+          comment += '📦 **Artifacts generated:**\n';
+          comment += '- Full ORT results\n';
+          comment += '- WebApp HTML report\n';
+          comment += '- CycloneDX SBOM\n';
+          comment += '- SPDX Document\n\n';
+          comment += '👉 Download artifacts from the workflow run to view detailed reports.\n';
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+      continue-on-error: true
