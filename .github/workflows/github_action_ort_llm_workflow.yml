@@ -31,11 +31,11 @@ jobs:
         pip install python-inspector openai pyyaml
         python-inspector --version
         
-    - name: Install ScanCode (optional)
-      run: |
-        pip install scancode-toolkit
-        scancode --version
-      continue-on-error: true
+    # - name: Install ScanCode (optional)
+    #   run: |
+    #     pip install scancode-toolkit
+    #     scancode --version
+    #   continue-on-error: true
         
     - name: Download ORT
       run: |
@@ -68,18 +68,18 @@ jobs:
           --advisors OSV
       continue-on-error: true
       
-    - name: Run ORT Scanner
-      run: |
-        if [ -f ort-results/advisor/advise-result.yml ]; then
-          INPUT_FILE="ort-results/advisor/advise-result.yml"
-        else
-          INPUT_FILE="ort-results/analyzer/analyzer-result.yml"
-        fi
+    # - name: Run ORT Scanner
+    #   run: |
+    #     if [ -f ort-results/advisor/advise-result.yml ]; then
+    #       INPUT_FILE="ort-results/advisor/advise-result.yml"
+    #     else
+    #       INPUT_FILE="ort-results/analyzer/analyzer-result.yml"
+    #     fi
         
-        ort scan \
-          -i "$INPUT_FILE" \
-          -o ort-results/scanner
-      continue-on-error: true
+    #     ort scan \
+    #       -i "$INPUT_FILE" \
+    #       -o ort-results/scanner
+    #   continue-on-error: true
       
     - name: Generate AI Curation Report
       env:
