@@ -1,11 +1,11 @@
-name: ORT Analysis
+name: ORT Analysis with AI Curation
 
 on:
   push:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
-  workflow_dispatch:  # Allows manual trigger
+  workflow_dispatch:
 
 jobs:
   ort-analysis:
@@ -26,9 +26,9 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
         
-    - name: Install python-inspector
+    - name: Install Python dependencies
       run: |
-        pip install python-inspector
+        pip install python-inspector openai pyyaml
         python-inspector --version
         
     - name: Install ScanCode (optional)
@@ -81,6 +81,14 @@ jobs:
           -o ort-results/scanner
       continue-on-error: true
       
+    - name: Generate AI Curation Report
+      env:
+        AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      run: |
+        python ort_curation_report.py
+      continue-on-error: true
+      
     - name: Generate ORT Reports
       run: |
         # Determine the latest result file
@@ -105,6 +113,14 @@ jobs:
         path: ort-results/
         retention-days: 30
         
+    - name: Upload AI Curation Report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ai-curation-report
+        path: curation-report-*.md
+        retention-days: 30
+        
     - name: Upload WebApp Report
       uses: actions/upload-artifact@v4
       if: always()
@@ -124,6 +140,13 @@ jobs:
           
           echo "- **Vulnerabilities found**: $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Add AI report info if available
+          if [ -f curation-report-*.md ]; then
+            echo "- **AI Curation Report**: ✅ Generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "📊 Download the artifacts to view detailed reports." >> $GITHUB_STEP_SUMMARY
         fi
       continue-on-error: true
@@ -139,9 +162,26 @@ jobs:
           comment += '✅ Analysis completed successfully!\n\n';
           comment += '📦 **Artifacts generated:**\n';
           comment += '- Full ORT results\n';
+          comment += '- 🤖 AI-Generated Curation Report\n';
           comment += '- WebApp HTML report\n';
           comment += '- CycloneDX SBOM\n';
           comment += '- SPDX Document\n\n';
+          
+          // Try to read and include summary from AI report
+          try {
+            const reportFiles = fs.readdirSync('.').filter(f => f.startsWith('curation-report-'));
+            if (reportFiles.length > 0) {
+              const reportContent = fs.readFileSync(reportFiles[0], 'utf8');
+              const summaryMatch = reportContent.match(/## Executive Summary\n\n([^\n]+)/);
+              if (summaryMatch) {
+                comment += '###   AI Curation Summary\n';
+                comment += summaryMatch[1] + '\n\n';
+              }
+            }
+          } catch (e) {
+            // Continue without summary
+          }
+          
           comment += '👉 Download artifacts from the workflow run to view detailed reports.\n';
           
           github.rest.issues.createComment({
