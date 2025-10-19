@@ -1,4 +1,4 @@
-name: ORT Analysis with AI Curation
+name: ORT Analysis with AI Curation Deploy
 
 on:
   push:
