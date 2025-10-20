@@ -1,4 +1,4 @@
-name: ORT Analysis with AI Curation
+name: ORT Analysis with AI Curation Deploy
 
 on:
   push:
@@ -6,6 +6,18 @@ on:
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
+
+# Add permissions for GitHub Pages deployment
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  pull-requests: write
+
+# Prevent concurrent deployments
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   ort-analysis:
@@ -30,12 +42,6 @@ jobs:
       run: |
         pip install python-inspector openai pyyaml
         python-inspector --version
-        
-    # - name: Install ScanCode (optional)
-    #   run: |
-    #     pip install scancode-toolkit
-    #     scancode --version
-    #   continue-on-error: true
         
     - name: Download ORT
       run: |
@@ -68,25 +74,12 @@ jobs:
           --advisors OSV
       continue-on-error: true
       
-    # - name: Run ORT Scanner
-    #   run: |
-    #     if [ -f ort-results/advisor/advise-result.yml ]; then
-    #       INPUT_FILE="ort-results/advisor/advise-result.yml"
-    #     else
-    #       INPUT_FILE="ort-results/analyzer/analyzer-result.yml"
-    #     fi
-        
-    #     ort scan \
-    #       -i "$INPUT_FILE" \
-    #       -o ort-results/scanner
-    #   continue-on-error: true
-      
     - name: Generate AI Curation Report
       env:
         AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
         AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
       run: |
-        python ort_curation_script.py
+        python ort_curation_script_html.py
       continue-on-error: true
       
     - name: Generate ORT Reports
@@ -104,12 +97,56 @@ jobs:
           -i "$INPUT_FILE" \
           -o ort-results/reporter \
           -f WebApp,StaticHtml,CycloneDx,SpdxDocument
+    
+    # Prepare artifacts for GitHub Pages
+    - name: Prepare Pages Deployment
+      run: |
+        mkdir -p public
+        
+        # Copy WebApp report as index.html
+        if [ -f ort-results/reporter/WebApp.html ]; then
+          cp ort-results/reporter/WebApp.html public/index.html
+        fi
+        
+        # Copy other reports
+        cp -r ort-results/reporter/* public/ 2>/dev/null || true
+        
+        # Copy AI curation report if available
+        if ls curation-report-*.md 1> /dev/null 2>&1; then
+          cp curation-report-*.md public/ 2>/dev/null || true
+        fi
+        
+        # Create a simple index page if needed
+        if [ ! -f public/index.html ]; then
+          echo "<html><body><h1>ORT Reports</h1><ul>" > public/index.html
+          for file in public/*; do
+            filename=$(basename "$file")
+            echo "<li><a href='$filename'>$filename</a></li>" >> public/index.html
+          done
+          echo "</ul></body></html>" >> public/index.html
+        fi
+    
+    # Upload to GitHub Pages (only on push to main branch)
+    - name: Setup Pages
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/configure-pages@v4
+      
+    - name: Upload Pages Artifact
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: 'public'
+        
+    - name: Deploy to GitHub Pages
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      id: deployment
+      uses: actions/deploy-pages@v4
           
     - name: Upload ORT Results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: ort-results
+        name: ort-results-${{ github.ref_name }}-${{ github.run_number }}
         path: ort-results/
         retention-days: 30
         
@@ -117,19 +154,12 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: ai-curation-report
+        name: ai-curation-report-${{ github.ref_name }}-${{ github.run_number }}
         path: curation-report-*.md
         retention-days: 30
         
-    - name: Upload WebApp Report
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: ort-webapp-report
-        path: ort-results/reporter/WebApp.html
-        retention-days: 30
-        
     - name: Check for vulnerabilities
+      id: vuln-check
       run: |
         if [ -f ort-results/advisor/advise-result.yml ]; then
           echo "## ORT Analysis Summary" >> $GITHUB_STEP_SUMMARY
@@ -139,15 +169,24 @@ jobs:
           VULN_COUNT=$(grep -c "vulnerability" ort-results/advisor/advise-result.yml 2>/dev/null || echo "0")
           
           echo "- **Vulnerabilities found**: $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Add AI report info if available
-          if [ -f curation-report-*.md ]; then
+          if ls curation-report-*.md 1> /dev/null 2>&1; then
             echo "- **AI Curation Report**: ✅ Generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Add Pages deployment info
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "- **GitHub Pages**: 🚀 Deployed" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "📊 Download the artifacts to view detailed reports." >> $GITHUB_STEP_SUMMARY
+          
+          # Output for use in PR comment
+          echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
         fi
       continue-on-error: true
       
@@ -160,6 +199,13 @@ jobs:
           
           let comment = '## 🔍 ORT Analysis Results\n\n';
           comment += '✅ Analysis completed successfully!\n\n';
+          
+          // Add direct link to view results
+          comment += '### 📊 View Reports\n\n';
+          comment += '**Quick Access:**\n';
+          comment += '- 🌐 [View WebApp Report (GitHub Pages)](https://' + context.repo.owner + '.github.io/' + context.repo.repo + '/)\n';
+          comment += '- 📥 [Download All Artifacts](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId + ')\n\n';
+          
           comment += '📦 **Artifacts generated:**\n';
           comment += '- Full ORT results\n';
           comment += '- 🤖 AI-Generated Curation Report\n';
@@ -174,7 +220,7 @@ jobs:
               const reportContent = fs.readFileSync(reportFiles[0], 'utf8');
               const summaryMatch = reportContent.match(/## Executive Summary\n\n([^\n]+)/);
               if (summaryMatch) {
-                comment += '###   AI Curation Summary\n';
+                comment += '### 🤖 AI Curation Summary\n';
                 comment += summaryMatch[1] + '\n\n';
               }
             }
@@ -182,7 +228,8 @@ jobs:
             // Continue without summary
           }
           
-          comment += '👉 Download artifacts from the workflow run to view detailed reports.\n';
+          comment += '---\n';
+          comment += '*💡 Tip: Once merged to main, the WebApp report will be deployed to GitHub Pages!*\n';
           
           github.rest.issues.createComment({
             issue_number: context.issue.number,
