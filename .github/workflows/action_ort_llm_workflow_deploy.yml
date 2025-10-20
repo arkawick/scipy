@@ -290,7 +290,7 @@ jobs:
       if: always()
       with:
         name: ai-curation-report-${{ github.ref_name }}-${{ github.run_number }}
-        path: curation-report-*.md
+        path: curation-report-*.html
         retention-days: 30
         
     - name: Check for vulnerabilities
