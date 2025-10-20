@@ -121,10 +121,10 @@ jobs:
         
         # Find the actual WebApp report file
         WEBAPP_FILE=""
-        if [ -f public/WebApp.html ]; then
-          WEBAPP_FILE="WebApp.html"
-        elif [ -f public/webapp.html ]; then
-          WEBAPP_FILE="webapp.html"
+        if [ -f public/scan-report-web-app.html ]; then
+          WEBAPP_FILE="scan-report-web-app.html"
+        elif [ -f public/scan-report-web-app.html ]; then
+          WEBAPP_FILE="scan-report-web-app.html"
         else
           # Find any HTML file in the root
           WEBAPP_FILE=$(find public/ -maxdepth 1 -name "*.html" -type f ! -name "index.html" | head -n 1 | xargs basename 2>/dev/null || echo "")
@@ -132,24 +132,24 @@ jobs:
         
         # Find StaticHtml report
         STATIC_HTML=""
-        if [ -f public/StaticHtml/scan-report.html ]; then
-          STATIC_HTML="StaticHtml/scan-report.html"
+        if [ -f public/scan-report.html ]; then
+          STATIC_HTML="scan-report.html"
         elif [ -d public/StaticHtml ]; then
           STATIC_HTML=$(find public/StaticHtml -name "*.html" | head -n 1 | sed 's|public/||' 2>/dev/null || echo "")
         fi
         
         # Find CycloneDX SBOM
         CYCLONEDX=""
-        if [ -f public/CycloneDx/bom.xml ]; then
-          CYCLONEDX="CycloneDx/bom.xml"
+        if [ -f public/bom.cyclonedx.json ]; then
+          CYCLONEDX="bom.cyclonedx.json"
         elif [ -d public/CycloneDx ]; then
           CYCLONEDX=$(find public/CycloneDx -type f | head -n 1 | sed 's|public/||' 2>/dev/null || echo "")
         fi
         
         # Find SPDX Document
         SPDX=""
-        if [ -f public/SpdxDocument/bom.spdx.yml ]; then
-          SPDX="SpdxDocument/bom.spdx.yml"
+        if [ -f public/bom.spdx.yml ]; then
+          SPDX="bom.spdx.yml"
         elif [ -d public/SpdxDocument ]; then
           SPDX=$(find public/SpdxDocument -type f | head -n 1 | sed 's|public/||' 2>/dev/null || echo "")
         fi
@@ -354,7 +354,7 @@ jobs:
       if: always()
       with:
         name: ai-curation-report-${{ github.ref_name }}-${{ github.run_number }}
-        path: curation-report-*.md
+        path: curation-report-*.html
         retention-days: 30
         
     - name: Check for vulnerabilities
