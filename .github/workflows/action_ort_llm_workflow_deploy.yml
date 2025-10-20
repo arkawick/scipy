@@ -103,20 +103,63 @@ jobs:
       run: |
         mkdir -p public
         
-        # Copy WebApp report as ort-report.html (not index)
-        if [ -f ort-results/reporter/WebApp.html ]; then
-          cp ort-results/reporter/WebApp.html public/ort-report.html
+        # Copy all ORT reporter files first
+        if [ -d ort-results/reporter ]; then
+          cp -r ort-results/reporter/* public/ 2>/dev/null || true
         fi
-        
-        # Copy other reports
-        cp -r ort-results/reporter/* public/ 2>/dev/null || true
         
         # Copy AI curation report if available (HTML format)
         AI_REPORT=""
         if ls curation-report-*.html 1> /dev/null 2>&1; then
           cp curation-report-*.html public/
-          AI_REPORT=$(ls curation-report-*.html | head -n 1)
+          AI_REPORT=$(ls curation-report-*.html | head -n 1 | xargs basename)
         fi
+        
+        # Detect actual file names
+        echo "📂 Detecting generated files..."
+        ls -la public/
+        
+        # Find the actual WebApp report file
+        WEBAPP_FILE=""
+        if [ -f public/WebApp.html ]; then
+          WEBAPP_FILE="WebApp.html"
+        elif [ -f public/webapp.html ]; then
+          WEBAPP_FILE="webapp.html"
+        else
+          # Find any HTML file in the root
+          WEBAPP_FILE=$(find public/ -maxdepth 1 -name "*.html" -type f ! -name "index.html" | head -n 1 | xargs basename 2>/dev/null || echo "")
+        fi
+        
+        # Find StaticHtml report
+        STATIC_HTML=""
+        if [ -f public/StaticHtml/scan-report.html ]; then
+          STATIC_HTML="StaticHtml/scan-report.html"
+        elif [ -d public/StaticHtml ]; then
+          STATIC_HTML=$(find public/StaticHtml -name "*.html" | head -n 1 | sed 's|public/||' 2>/dev/null || echo "")
+        fi
+        
+        # Find CycloneDX SBOM
+        CYCLONEDX=""
+        if [ -f public/CycloneDx/bom.xml ]; then
+          CYCLONEDX="CycloneDx/bom.xml"
+        elif [ -d public/CycloneDx ]; then
+          CYCLONEDX=$(find public/CycloneDx -type f | head -n 1 | sed 's|public/||' 2>/dev/null || echo "")
+        fi
+        
+        # Find SPDX Document
+        SPDX=""
+        if [ -f public/SpdxDocument/bom.spdx.yml ]; then
+          SPDX="SpdxDocument/bom.spdx.yml"
+        elif [ -d public/SpdxDocument ]; then
+          SPDX=$(find public/SpdxDocument -type f | head -n 1 | sed 's|public/||' 2>/dev/null || echo "")
+        fi
+        
+        echo "✅ Detected files:"
+        echo "  WebApp: $WEBAPP_FILE"
+        echo "  AI Report: $AI_REPORT"
+        echo "  Static HTML: $STATIC_HTML"
+        echo "  CycloneDX: $CYCLONEDX"
+        echo "  SPDX: $SPDX"
         
         # Create a landing page with links to all reports
         cat > public/index.html << 'HTMLEOF'
@@ -220,7 +263,7 @@ jobs:
         # Add AI Curation Report link if available
         if [ -n "$AI_REPORT" ]; then
           cat >> public/index.html << HTMLEOF
-              <a href="$(basename $AI_REPORT)" class="report-card highlight">
+              <a href="$AI_REPORT" class="report-card highlight">
                 <div class="report-icon">🤖</div>
                 <div class="report-title">AI Curation Report <span class="badge">NEW</span></div>
                 <div class="report-desc">AI-powered analysis and curation recommendations for your dependencies</div>
@@ -228,31 +271,52 @@ jobs:
         HTMLEOF
         fi
         
-        # Add ORT WebApp Report link
-        cat >> public/index.html << 'HTMLEOF'
-              <a href="ort-report.html" class="report-card">
+        # Add ORT WebApp Report link if found
+        if [ -n "$WEBAPP_FILE" ]; then
+          cat >> public/index.html << HTMLEOF
+              <a href="$WEBAPP_FILE" class="report-card">
                 <div class="report-icon">🔍</div>
                 <div class="report-title">ORT WebApp Report</div>
                 <div class="report-desc">Interactive web-based analysis with dependency tree visualization</div>
               </a>
-              
-              <a href="StaticHtml/scan-report.html" class="report-card">
+        HTMLEOF
+        fi
+        
+        # Add Static HTML Report link if found
+        if [ -n "$STATIC_HTML" ]; then
+          cat >> public/index.html << HTMLEOF
+              <a href="$STATIC_HTML" class="report-card">
                 <div class="report-icon">📄</div>
                 <div class="report-title">Static HTML Report</div>
                 <div class="report-desc">Detailed static report with licensing and vulnerability information</div>
               </a>
-              
-              <a href="CycloneDx/bom.xml" class="report-card">
+        HTMLEOF
+        fi
+        
+        # Add CycloneDX link if found
+        if [ -n "$CYCLONEDX" ]; then
+          cat >> public/index.html << HTMLEOF
+              <a href="$CYCLONEDX" class="report-card">
                 <div class="report-icon">📦</div>
                 <div class="report-title">CycloneDX SBOM</div>
                 <div class="report-desc">Software Bill of Materials in CycloneDX format</div>
               </a>
-              
-              <a href="SpdxDocument/bom.spdx.yml" class="report-card">
+        HTMLEOF
+        fi
+        
+        # Add SPDX link if found
+        if [ -n "$SPDX" ]; then
+          cat >> public/index.html << HTMLEOF
+              <a href="$SPDX" class="report-card">
                 <div class="report-icon">📋</div>
                 <div class="report-title">SPDX Document</div>
                 <div class="report-desc">Software Package Data Exchange standard format</div>
               </a>
+        HTMLEOF
+        fi
+        
+        # Close HTML
+        cat >> public/index.html << 'HTMLEOF'
             </div>
           </div>
         </body>
@@ -290,7 +354,7 @@ jobs:
       if: always()
       with:
         name: ai-curation-report-${{ github.ref_name }}-${{ github.run_number }}
-        path: curation-report-*.html
+        path: curation-report-*.md
         retention-days: 30
         
     - name: Check for vulnerabilities
