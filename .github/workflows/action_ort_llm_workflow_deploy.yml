@@ -107,6 +107,12 @@ jobs:
         if [ -d ort-results/reporter ]; then
           cp -r ort-results/reporter/* public/ 2>/dev/null || true
         fi
+
+        # Copy background image from root directory to public
+        if [ -f background.jpg ] || [ -f background.png ] || [ -f background.svg ]; then
+          cp background.* public/ 2>/dev/null || true
+          echo "✅ Background image copied"
+        fi
         
         # Copy AI curation report if available (HTML format)
         AI_REPORT=""
@@ -160,7 +166,17 @@ jobs:
         echo "  Static HTML: $STATIC_HTML"
         echo "  CycloneDX: $CYCLONEDX"
         echo "  SPDX: $SPDX"
-        
+
+        # Detect background image
+        BG_IMAGE=""
+        for ext in jpg jpeg png svg webp; do
+          if [ -f "public/background.$ext" ]; then
+            BG_IMAGE="background.$ext"
+            echo "  Background: $BG_IMAGE"
+            break
+          fi
+        done
+
         # Create a landing page with links to all reports
         cat > public/index.html << 'HTMLEOF'
         <!DOCTYPE html>
@@ -173,12 +189,15 @@ jobs:
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+              background: 
+                linear-gradient(135deg, rgba(102,126,234,0.8), rgba(118,75,162,0.8)),
+                url('$BG_IMAGE') no-repeat center center fixed;
+              background-size: cover;
               min-height: 100vh;
               display: flex;
               align-items: center;
               justify-content: center;
-              padding: 20px;
+              padding: 110px 20px 20px;
             }
             .container {
               background: white;
@@ -255,7 +274,7 @@ jobs:
         <body>
           <div class="container">
             <h1>📊 ORT Analysis Reports</h1>
-            <p class="subtitle">Open Source Review Toolkit - Analysis Results</p>
+            <p class="subtitle">Open Source Review Toolkit - Analysis Results by LTTS ORT Curation Report Generator</p>
             
             <div class="report-grid">
         HTMLEOF
