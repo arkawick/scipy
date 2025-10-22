@@ -86,7 +86,7 @@ jobs:
         AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
         AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
       run: |
-        python ort_curation_script.py
+        python ort_curation_script_md.py
       continue-on-error: true
       
     - name: Generate ORT Reports

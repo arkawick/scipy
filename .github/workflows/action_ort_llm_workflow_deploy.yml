@@ -1,0 +1,439 @@
+name: ORT Analysis with AI Curation Deploy
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+# Add permissions for GitHub Pages deployment
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  pull-requests: write
+
+# Prevent concurrent deployments
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  ort-analysis:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Set up Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+        
+    - name: Install Python dependencies
+      run: |
+        pip install python-inspector openai pyyaml
+        python-inspector --version
+        
+    - name: Download ORT
+      run: |
+        ORT_VERSION="70.0.1"
+        wget -q https://github.com/oss-review-toolkit/ort/releases/download/${ORT_VERSION}/ort-${ORT_VERSION}.tgz
+        tar -xzf ort-${ORT_VERSION}.tgz
+        echo "${GITHUB_WORKSPACE}/ort-${ORT_VERSION}/bin" >> $GITHUB_PATH
+        
+    - name: Verify ORT installation
+      run: |
+        ort --version
+        java -version
+        
+    - name: Clean previous results
+      run: |
+        rm -rf ort-results
+        mkdir -p ort-results
+        
+    - name: Run ORT Analyzer
+      run: |
+        ort analyze \
+          -i . \
+          -o ort-results/analyzer
+          
+    - name: Run ORT Advisor
+      run: |
+        ort advise \
+          -i ort-results/analyzer/analyzer-result.yml \
+          -o ort-results/advisor \
+          --advisors OSV
+      continue-on-error: true
+      
+    - name: Generate AI Curation Report
+      env:
+        AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      run: |
+        python ort_curation_script_html.py
+      continue-on-error: true
+      
+    - name: Generate ORT Reports
+      run: |
+        # Determine the latest result file
+        if [ -f ort-results/scanner/scan-result.yml ]; then
+          INPUT_FILE="ort-results/scanner/scan-result.yml"
+        elif [ -f ort-results/advisor/advise-result.yml ]; then
+          INPUT_FILE="ort-results/advisor/advise-result.yml"
+        else
+          INPUT_FILE="ort-results/analyzer/analyzer-result.yml"
+        fi
+        
+        ort report \
+          -i "$INPUT_FILE" \
+          -o ort-results/reporter \
+          -f WebApp,StaticHtml,CycloneDx,SpdxDocument
+    
+    # Prepare artifacts for GitHub Pages
+    - name: Prepare Pages Deployment
+      run: |
+        mkdir -p public
+        
+        # Copy all ORT reporter files first
+        if [ -d ort-results/reporter ]; then
+          cp -r ort-results/reporter/* public/ 2>/dev/null || true
+        fi
+        
+        # Copy AI curation report if available (HTML format)
+        AI_REPORT=""
+        if ls curation-report-*.html 1> /dev/null 2>&1; then
+          cp curation-report-*.html public/
+          AI_REPORT=$(ls curation-report-*.html | head -n 1 | xargs basename)
+        fi
+        
+        # Detect actual file names
+        echo "📂 Detecting generated files..."
+        ls -la public/
+        
+        # Find the actual WebApp report file
+        WEBAPP_FILE=""
+        if [ -f public/scan-report-web-app.html ]; then
+          WEBAPP_FILE="scan-report-web-app.html"
+        elif [ -f public/scan-report-web-app.html ]; then
+          WEBAPP_FILE="scan-report-web-app.html"
+        else
+          # Find any HTML file in the root
+          WEBAPP_FILE=$(find public/ -maxdepth 1 -name "*.html" -type f ! -name "index.html" | head -n 1 | xargs basename 2>/dev/null || echo "")
+        fi
+        
+        # Find StaticHtml report
+        STATIC_HTML=""
+        if [ -f public/scan-report.html ]; then
+          STATIC_HTML="scan-report.html"
+        elif [ -d public/StaticHtml ]; then
+          STATIC_HTML=$(find public/StaticHtml -name "*.html" | head -n 1 | sed 's|public/||' 2>/dev/null || echo "")
+        fi
+        
+        # Find CycloneDX SBOM
+        CYCLONEDX=""
+        if [ -f public/bom.cyclonedx.json ]; then
+          CYCLONEDX="bom.cyclonedx.json"
+        elif [ -d public/CycloneDx ]; then
+          CYCLONEDX=$(find public/CycloneDx -type f | head -n 1 | sed 's|public/||' 2>/dev/null || echo "")
+        fi
+        
+        # Find SPDX Document
+        SPDX=""
+        if [ -f public/bom.spdx.yml ]; then
+          SPDX="bom.spdx.yml"
+        elif [ -d public/SpdxDocument ]; then
+          SPDX=$(find public/SpdxDocument -type f | head -n 1 | sed 's|public/||' 2>/dev/null || echo "")
+        fi
+        
+        echo "✅ Detected files:"
+        echo "  WebApp: $WEBAPP_FILE"
+        echo "  AI Report: $AI_REPORT"
+        echo "  Static HTML: $STATIC_HTML"
+        echo "  CycloneDX: $CYCLONEDX"
+        echo "  SPDX: $SPDX"
+        
+        # Create a landing page with links to all reports
+        cat > public/index.html << 'HTMLEOF'
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>ORT Analysis Reports</title>
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+              min-height: 100vh;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 20px;
+            }
+            .container {
+              background: white;
+              border-radius: 16px;
+              padding: 40px;
+              max-width: 800px;
+              width: 100%;
+              box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            }
+            h1 {
+              color: #2d3748;
+              margin-bottom: 10px;
+              font-size: 2.5rem;
+            }
+            .subtitle {
+              color: #718096;
+              margin-bottom: 30px;
+              font-size: 1.1rem;
+            }
+            .report-grid {
+              display: grid;
+              gap: 16px;
+              margin-top: 30px;
+            }
+            .report-card {
+              background: #f7fafc;
+              border: 2px solid #e2e8f0;
+              border-radius: 12px;
+              padding: 24px;
+              transition: all 0.3s ease;
+              text-decoration: none;
+              display: block;
+            }
+            .report-card:hover {
+              border-color: #667eea;
+              box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+              transform: translateY(-2px);
+            }
+            .report-icon {
+              font-size: 2rem;
+              margin-bottom: 12px;
+            }
+            .report-title {
+              color: #2d3748;
+              font-size: 1.3rem;
+              font-weight: 600;
+              margin-bottom: 8px;
+            }
+            .report-desc {
+              color: #718096;
+              font-size: 0.95rem;
+              line-height: 1.5;
+            }
+            .highlight {
+              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+              border: none;
+            }
+            .highlight .report-title,
+            .highlight .report-desc {
+              color: white;
+            }
+            .badge {
+              display: inline-block;
+              background: #48bb78;
+              color: white;
+              padding: 4px 12px;
+              border-radius: 12px;
+              font-size: 0.75rem;
+              font-weight: 600;
+              margin-left: 8px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>📊 ORT Analysis Reports</h1>
+            <p class="subtitle">Open Source Review Toolkit - Analysis Results</p>
+            
+            <div class="report-grid">
+        HTMLEOF
+        
+        # Add AI Curation Report link if available
+        if [ -n "$AI_REPORT" ]; then
+          cat >> public/index.html << HTMLEOF
+              <a href="$AI_REPORT" class="report-card highlight">
+                <div class="report-icon">🤖</div>
+                <div class="report-title">AI Curation Report <span class="badge">NEW</span></div>
+                <div class="report-desc">AI-powered analysis and curation recommendations for your dependencies</div>
+              </a>
+        HTMLEOF
+        fi
+        
+        # Add ORT WebApp Report link if found
+        if [ -n "$WEBAPP_FILE" ]; then
+          cat >> public/index.html << HTMLEOF
+              <a href="$WEBAPP_FILE" class="report-card">
+                <div class="report-icon">🔍</div>
+                <div class="report-title">ORT WebApp Report</div>
+                <div class="report-desc">Interactive web-based analysis with dependency tree visualization</div>
+              </a>
+        HTMLEOF
+        fi
+        
+        # Add Static HTML Report link if found
+        if [ -n "$STATIC_HTML" ]; then
+          cat >> public/index.html << HTMLEOF
+              <a href="$STATIC_HTML" class="report-card">
+                <div class="report-icon">📄</div>
+                <div class="report-title">Static HTML Report</div>
+                <div class="report-desc">Detailed static report with licensing and vulnerability information</div>
+              </a>
+        HTMLEOF
+        fi
+        
+        # Add CycloneDX link if found
+        if [ -n "$CYCLONEDX" ]; then
+          cat >> public/index.html << HTMLEOF
+              <a href="$CYCLONEDX" class="report-card">
+                <div class="report-icon">📦</div>
+                <div class="report-title">CycloneDX SBOM</div>
+                <div class="report-desc">Software Bill of Materials in CycloneDX format</div>
+              </a>
+        HTMLEOF
+        fi
+        
+        # Add SPDX link if found
+        if [ -n "$SPDX" ]; then
+          cat >> public/index.html << HTMLEOF
+              <a href="$SPDX" class="report-card">
+                <div class="report-icon">📋</div>
+                <div class="report-title">SPDX Document</div>
+                <div class="report-desc">Software Package Data Exchange standard format</div>
+              </a>
+        HTMLEOF
+        fi
+        
+        # Close HTML
+        cat >> public/index.html << 'HTMLEOF'
+            </div>
+          </div>
+        </body>
+        </html>
+        HTMLEOF
+        
+        echo "✅ GitHub Pages deployment prepared with landing page"
+    
+    # Upload to GitHub Pages (only on push to main branch)
+    - name: Setup Pages
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/configure-pages@v4
+      
+    - name: Upload Pages Artifact
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: 'public'
+        
+    - name: Deploy to GitHub Pages
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      id: deployment
+      uses: actions/deploy-pages@v4
+          
+    - name: Upload ORT Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ort-results-${{ github.ref_name }}-${{ github.run_number }}
+        path: ort-results/
+        retention-days: 30
+        
+    - name: Upload AI Curation Report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ai-curation-report-${{ github.ref_name }}-${{ github.run_number }}
+        path: curation-report-*.html
+        retention-days: 30
+        
+    - name: Check for vulnerabilities
+      id: vuln-check
+      run: |
+        if [ -f ort-results/advisor/advise-result.yml ]; then
+          echo "## ORT Analysis Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Count issues
+          VULN_COUNT=$(grep -c "vulnerability" ort-results/advisor/advise-result.yml 2>/dev/null || echo "0")
+          
+          echo "- **Vulnerabilities found**: $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Add AI report info if available
+          if ls curation-report-*.html 1> /dev/null 2>&1; then
+            echo "- **AI Curation Report**: ✅ Generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Add Pages deployment info
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "- **GitHub Pages**: 🚀 Deployed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📊 Download the artifacts to view detailed reports." >> $GITHUB_STEP_SUMMARY
+          
+          # Output for use in PR comment
+          echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+        fi
+      continue-on-error: true
+      
+    - name: Comment PR with results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          
+          let comment = '## 🔍 ORT Analysis Results\n\n';
+          comment += '✅ Analysis completed successfully!\n\n';
+          
+          // Add direct link to view results
+          comment += '### 📊 View Reports\n\n';
+          comment += '**Quick Access:**\n';
+          comment += '- 🌐 [View WebApp Report (GitHub Pages)](https://' + context.repo.owner + '.github.io/' + context.repo.repo + '/)\n';
+          comment += '- 📥 [Download All Artifacts](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId + ')\n\n';
+          
+          comment += '📦 **Artifacts generated:**\n';
+          comment += '- Full ORT results\n';
+          comment += '- 🤖 AI-Generated Curation Report\n';
+          comment += '- WebApp HTML report\n';
+          comment += '- CycloneDX SBOM\n';
+          comment += '- SPDX Document\n\n';
+          
+          // Try to read and include summary from AI report
+          try {
+            const reportFiles = fs.readdirSync('.').filter(f => f.startsWith('curation-report-'));
+            if (reportFiles.length > 0) {
+              const reportContent = fs.readFileSync(reportFiles[0], 'utf8');
+              const summaryMatch = reportContent.match(/## Executive Summary\n\n([^\n]+)/);
+              if (summaryMatch) {
+                comment += '### 🤖 AI Curation Summary\n';
+                comment += summaryMatch[1] + '\n\n';
+              }
+            }
+          } catch (e) {
+            // Continue without summary
+          }
+          
+          comment += '---\n';
+          comment += '*💡 Tip: Once merged to main, the WebApp report will be deployed to GitHub Pages!*\n';
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+      continue-on-error: true
