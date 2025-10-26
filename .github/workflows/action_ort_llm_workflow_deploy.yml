@@ -273,7 +273,7 @@ jobs:
         </head>
         <body>
           <div class="container">
-            <h1>📊 ORT Analysis Reports</h1>
+            <h1>ORT Analysis Reports</h1>
             <p class="subtitle">Open Source Review Toolkit - Analysis Results by LTTS ORT Curation Report Generator</p>
             
             <div class="report-grid">
